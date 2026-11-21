@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WTCNUP community submission",
+  "type": "object",
+  "required": [
+    "id",
+    "github_user",
+    "author_name",
+    "work_name",
+    "game_version",
+    "translation_version",
+    "file_count",
+    "total_size",
+    "files",
+    "submitted_at",
+    "status"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "github_user": { "type": "string" },
+    "author_name": { "type": "string" },
+    "work_name": { "type": "string" },
+    "game_version": { "type": "string" },
+    "translation_version": { "type": "string" },
+    "notes": { "type": "string" },
+    "file_count": { "type": "integer", "minimum": 1 },
+    "total_size": { "type": "integer", "minimum": 1 },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "size", "sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+        }
+      }
+    },
+    "submitted_at": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "reviewing", "approved", "rejected", "published", "withdrawn"]
+    },
+    "pr_number": { "type": ["integer", "null"] }
+  }
+}
