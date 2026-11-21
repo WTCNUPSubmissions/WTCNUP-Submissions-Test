@@ -1,0 +1,41 @@
+name: Validate community submission
+
+on:
+  pull_request:
+    paths:
+      - "submissions/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PR data
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate files and build ZIP
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/validate_submission.py
+
+      - name: Upload package artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: submission-package
+          path: out/
+          if-no-files-found: error
+
+      # Phase 0: no release, no secrets, no publish token.
