@@ -80,6 +80,10 @@ def validate_v2(git: Git, base: str, head: str, author: str, branch: str):
                 "file SHA-256 mismatch")
         require(not any(contents.startswith(sig) for sig in MAGIC),
                 "archive or executable signature")
+        try:
+            schema_v2.validate_payload(path, contents)
+        except schema_v2.Invalid as exc:
+            raise Invalid(str(exc)) from exc
         total += len(contents)
         require(total <= schema_v2.MAX_TOTAL, "submission too large")
     require(total == metadata["total_size"], "total size mismatch")

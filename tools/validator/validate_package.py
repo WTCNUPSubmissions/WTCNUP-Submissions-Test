@@ -116,6 +116,10 @@ def verify_package(path: Path, expected_sha256: str | None = None):
                     "payload SHA-256 mismatch")
             require(not any(data.startswith(sig) for sig in (b"PK\x03\x04", b"MZ")),
                     "archive/executable payload signature")
+            try:
+                schema_v2.validate_payload(rel, data)
+            except schema_v2.Invalid as exc:
+                raise Invalid(str(exc)) from exc
             total += len(data)
         require(total == metadata["total_size"], "total_size mismatch")
         require(len(actual) == metadata["file_count"], "file_count mismatch")

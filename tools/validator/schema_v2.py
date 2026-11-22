@@ -30,10 +30,11 @@ MAX_PATH_UTF16 = 240
 MAX_SEGMENT_UTF16 = 120
 MAX_DEPTH = 10
 MAX_FIELD_CHARS = 10000
-EXTENSIONS = {
-    ".blk", ".csv", ".json", ".txt", ".yml", ".yaml", ".ini",
-    ".dds", ".png", ".tga", ".ogg", ".wav", ".loc",
-}
+# Owner decision: exact lowercase .csv and .blk are the allowed extensions.
+EXTENSIONS = frozenset({".csv", ".blk"})
+# Game CSVs in the accepted fixtures use semicolon; comma is also supported.
+CSV_DELIMITERS = (",", ";")
+CSV_MAX_COLUMNS = 4096
 UID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -108,8 +109,94 @@ def safe_path(value: str) -> str:
     require(len(parts) <= MAX_DEPTH, "too many path segments")
     for part in parts:
         require(not unsafe_segment(part), "unsafe path segment")
-    require(PurePosixPath(value).suffix.lower() in EXTENSIONS, "extension not allowed")
+    name = PurePosixPath(value).name
+    require(name.count(".") == 1 and PurePosixPath(value).suffix in EXTENSIONS,
+            "only exact lowercase .csv/.blk is allowed; double extension is forbidden")
     return value
+
+
+def validate_blk_content(data: bytes, path: str = "file") -> None:
+    """Validate a .blk as inert UTF-8 text (no CSV/table requirement)."""
+    require(isinstance(data, (bytes, bytearray)) and len(data) > 0,
+            f"{path}: BLK is empty")
+    raw = bytes(data)
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    require(bool(raw), f"{path}: BLK is empty")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as exc:
+        raise Invalid(f"{path}: BLK must be valid UTF-8") from exc
+    require("\x00" not in text, f"{path}: BLK contains NUL")
+    for ch in text:
+        if (ord(ch) < 32 and ch not in "\t\r\n") or ord(ch) == 127:
+            raise Invalid(f"{path}: BLK contains control characters")
+    require(any(not ch.isspace() for ch in text), f"{path}: BLK is empty")
+
+
+def validate_payload(path: str, data: bytes) -> None:
+    suffix = PurePosixPath(path).suffix
+    if suffix == ".csv":
+        validate_csv_content(data, path)
+    elif suffix == ".blk":
+        validate_blk_content(data, path)
+    else:
+        raise Invalid(f"{path}: unsupported extension")
+
+
+def validate_csv_content(data: bytes, path: str = "file") -> None:
+    """Validate that a .csv file is inert, UTF-8, delimited text.
+
+    Game localization CSVs in the accepted fixtures use semicolon; comma is
+    also supported. Every row must have at least two fields and all rows in a
+    file must have the same field count. The delimiter must be one of
+    CSV_DELIMITERS and is chosen only when it produces a structurally valid
+    table. No field is executed or interpreted.
+    """
+    import csv
+    import io
+
+    require(isinstance(data, (bytes, bytearray)) and len(data) > 0,
+            f"{path}: CSV is empty")
+    raw = bytes(data)
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    require(bool(raw), f"{path}: CSV is empty")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as exc:
+        raise Invalid(f"{path}: CSV must be valid UTF-8") from exc
+    require("\x00" not in text, f"{path}: CSV contains NUL")
+    for ch in text:
+        if (ord(ch) < 32 and ch not in "\t\r\n") or ord(ch) == 127:
+            raise Invalid(f"{path}: CSV contains control characters")
+
+    errors = []
+    for delimiter in CSV_DELIMITERS:
+        try:
+            rows = list(csv.reader(io.StringIO(text, newline=""),
+                                    delimiter=delimiter, strict=True))
+        except csv.Error as exc:
+            errors.append(f"{delimiter}: malformed CSV")
+            continue
+        if not rows:
+            errors.append(f"{delimiter}: no rows")
+            continue
+        width = len(rows[0])
+        if width < 2:
+            errors.append(f"{delimiter}: rows need at least two columns")
+            continue
+        if width > CSV_MAX_COLUMNS:
+            errors.append(f"{delimiter}: too many CSV columns")
+            continue
+        if any(len(row) != width for row in rows):
+            errors.append(f"{delimiter}: inconsistent CSV column count")
+            continue
+        if not any(any(field != "" for field in row) for row in rows):
+            errors.append(f"{delimiter}: empty CSV")
+            continue
+        return
+    raise Invalid(f"{path}: invalid CSV ({'; '.join(errors)})")
 
 
 def collision_key(value: str) -> str:
@@ -212,6 +299,7 @@ def validate_metadata(metadata, expected_uid: str | None = None,
             data = p.read_bytes()
             require(len(data) == declared[rel]["size"], "file size mismatch")
             require(hashlib.sha256(data).hexdigest() == declared[rel]["sha256"], "file SHA-256 mismatch")
+            validate_payload(rel, data)
     return uid, declared
 
 
