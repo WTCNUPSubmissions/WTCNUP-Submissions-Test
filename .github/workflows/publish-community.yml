@@ -222,7 +222,7 @@ jobs:
           $indexPath = Join-Path $env:RUNNER_TEMP 'CommunityIndex.json'
           $sigPath = Join-Path $env:RUNNER_TEMP 'CommunityIndex.sig'
           $index | ConvertTo-Json -Depth 20 -Compress | Set-Content -Encoding utf8 -NoNewline $indexPath
-          & build/Release/community-publisher.exe sign-index --index $indexPath --out $sigPath --key-id 'community-index-2026-01'
+          & build/Release/community-publisher.exe sign-index --index $indexPath --out $sigPath --key-id 'community-index-2026-11'
           if ($LASTEXITCODE -ne 0) { throw 'sign failed' }
           function Blob([string]$path) {
             $bytes = [IO.File]::ReadAllBytes($path)
