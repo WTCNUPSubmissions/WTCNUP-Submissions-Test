@@ -178,17 +178,18 @@ jobs:
           $currentIndexPath = Join-Path $env:RUNNER_TEMP 'current-CommunityIndex.json'
           Invoke-WebRequest "https://api.github.com/repos/$env:REPO/contents/CommunityIndex.json?ref=$branch" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github.raw'; 'User-Agent' = 'WTCNUP-Publish' } -OutFile $currentIndexPath
           $index = Get-Content $currentIndexPath -Raw -Encoding UTF8 | ConvertFrom-Json
-          $authorId = $env:AUTHOR
-          if (-not $authorId) { throw 'missing PR author' }
+          $authorLogin = $env:AUTHOR
+          if (-not $authorLogin) { throw 'missing PR author' }
+          $authorId = $authorLogin.ToLowerInvariant()
           $author = $index.authors | Where-Object { $_.author_id -eq $authorId } | Select-Object -First 1
           if (-not $author) {
             $githubUser = $null
-            try { $githubUser = Invoke-RestMethod "https://api.github.com/users/$authorId" -Headers $headers } catch {}
+            try { $githubUser = Invoke-RestMethod "https://api.github.com/users/$authorLogin" -Headers $headers } catch {}
             $author = [pscustomobject]@{
               author_id = $authorId
               github_user_id = if ($githubUser) { [int64]$githubUser.id } else { 0 }
-              github_login = $authorId
-              display_name = if ($githubUser -and $githubUser.name) { [string]$githubUser.name } else { $authorId }
+              github_login = $authorLogin
+              display_name = if ($githubUser -and $githubUser.name) { [string]$githubUser.name } else { $authorLogin }
               projects = @()
             }
             $index.authors += $author
