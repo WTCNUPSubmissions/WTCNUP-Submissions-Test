@@ -185,9 +185,12 @@ jobs:
           if (-not $author) {
             $githubUser = $null
             try { $githubUser = Invoke-RestMethod "https://api.github.com/users/$authorLogin" -Headers $headers } catch {}
+            if (-not $githubUser -or [int64]$githubUser.id -le 0) {
+              throw "cannot resolve GitHub user id for $authorLogin"
+            }
             $author = [pscustomobject]@{
               author_id = $authorId
-              github_user_id = if ($githubUser) { [int64]$githubUser.id } else { 0 }
+              github_user_id = [int64]$githubUser.id
               github_login = $authorLogin
               display_name = if ($githubUser -and $githubUser.name) { [string]$githubUser.name } else { $authorLogin }
               projects = @()
