@@ -1,0 +1,84 @@
+name: Publish merged community submission
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+
+jobs:
+  dispatch-publish:
+    if: github.event.pull_request.merged == true
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Locate exact review artifacts and dispatch protected publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Auto-Publish' }
+          $all = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/actions/artifacts?per_page=100" -Headers $headers
+          $prefix = "review-package-$($env:HEAD_SHA)-"
+          $pkg = $all.artifacts | Where-Object { $_.name -like "$prefix*" -and -not $_.expired } |
+            Sort-Object created_at -Descending | Select-Object -First 1
+          if (-not $pkg) { throw 'review ZIP artifact missing or expired' }
+          $suffix = $pkg.name.Substring($prefix.Length)
+          $manifestName = "review-manifest-$($env:HEAD_SHA)-$suffix"
+          $manifestArtifact = $all.artifacts | Where-Object { $_.name -eq $manifestName -and -not $_.expired } |
+            Select-Object -First 1
+          if (-not $manifestArtifact) { throw 'review manifest artifact missing or expired' }
+          $tmp = Join-Path $env:RUNNER_TEMP 'auto-review'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Invoke-WebRequest "https://api.github.com/repos/$env:REPO/actions/artifacts/$($pkg.id)/zip" -Headers $headers -OutFile (Join-Path $tmp 'pkg.zip')
+          Invoke-WebRequest "https://api.github.com/repos/$env:REPO/actions/artifacts/$($manifestArtifact.id)/zip" -Headers $headers -OutFile (Join-Path $tmp 'manifest.zip')
+          Expand-Archive (Join-Path $tmp 'pkg.zip') -DestinationPath (Join-Path $tmp 'pkg') -Force
+          Expand-Archive (Join-Path $tmp 'manifest.zip') -DestinationPath (Join-Path $tmp 'manifest') -Force
+          $zip = Get-ChildItem (Join-Path $tmp 'pkg') -Recurse -Filter submission.zip | Select-Object -First 1
+          $manifestFile = Get-ChildItem (Join-Path $tmp 'manifest') -Recurse -Filter package-manifest.json | Select-Object -First 1
+          if (-not $zip -or -not $manifestFile) { throw 'artifact content missing' }
+          $manifest = Get-Content $manifestFile.FullName -Raw | ConvertFrom-Json
+          if ($manifest.pull_request_head_sha -ne $env:HEAD_SHA) { throw 'review head mismatch' }
+          if ($manifest.pull_request_number -ne [int]$env:PR_NUMBER) { throw 'review PR mismatch' }
+          $unpack = Join-Path $tmp 'submission'
+          Expand-Archive $zip.FullName -DestinationPath $unpack -Force
+          $submission = Get-Content (Join-Path $unpack 'submission.json') -Raw | ConvertFrom-Json
+          $uid = $manifest.submission_uid
+          $tag = "community-$uid"
+          $projectId = if ($submission.project_id) { [string]$submission.project_id } else { "wtcnup-$uid" }
+          $body = @{
+            ref = 'main'
+            inputs = @{
+              artifact_id = [string]$pkg.id
+              manifest_artifact_id = [string]$manifestArtifact.id
+              tag = $tag
+              uid = $uid
+              author = $env:PR_AUTHOR
+              pr_number = [string]$env:PR_NUMBER
+              base_sha = $env:BASE_SHA
+              head_sha = $env:HEAD_SHA
+              project_id = $projectId
+              project_name = [string]$submission.project_name
+              translation_version = [string]$submission.translation_version
+              game_version = [string]$submission.game_version
+              channel = [string]$submission.channel
+            }
+          } | ConvertTo-Json -Depth 5 -Compress
+          Invoke-RestMethod "https://api.github.com/repos/$env:REPO/actions/workflows/publish-community.yml/dispatches" -Method Post -Headers $headers -ContentType 'application/json' -Body $body | Out-Null
+          @"
+          ## Merged publish dispatched
+          - PR: #$($env:PR_NUMBER)
+          - submission_uid: $uid
+          - review ZIP artifact: $($pkg.id)
+          - review manifest artifact: $($manifestArtifact.id)
+          - publish tag: $tag
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY
