@@ -178,8 +178,21 @@ jobs:
           $currentIndexPath = Join-Path $env:RUNNER_TEMP 'current-CommunityIndex.json'
           Invoke-WebRequest "https://api.github.com/repos/$env:REPO/contents/CommunityIndex.json?ref=$branch" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github.raw'; 'User-Agent' = 'WTCNUP-Publish' } -OutFile $currentIndexPath
           $index = Get-Content $currentIndexPath -Raw -Encoding UTF8 | ConvertFrom-Json
-          $author = $index.authors | Where-Object { $_.author_id -eq 'sennjukai' } | Select-Object -First 1
-          if (-not $author) { throw 'expected index author missing' }
+          $authorId = $env:AUTHOR
+          if (-not $authorId) { throw 'missing PR author' }
+          $author = $index.authors | Where-Object { $_.author_id -eq $authorId } | Select-Object -First 1
+          if (-not $author) {
+            $githubUser = $null
+            try { $githubUser = Invoke-RestMethod "https://api.github.com/users/$authorId" -Headers $headers } catch {}
+            $author = [pscustomobject]@{
+              author_id = $authorId
+              github_user_id = if ($githubUser) { [int64]$githubUser.id } else { 0 }
+              github_login = $authorId
+              display_name = if ($githubUser -and $githubUser.name) { [string]$githubUser.name } else { $authorId }
+              projects = @()
+            }
+            $index.authors += $author
+          }
           $project = $author.projects | Where-Object { $_.project_id -eq $env:PROJECT_ID } | Select-Object -First 1
           if (-not $project) {
             $project = [pscustomobject]@{ project_id = $env:PROJECT_ID; project_name = $env:PROJECT_NAME; status = 'active'; versions = @() }
