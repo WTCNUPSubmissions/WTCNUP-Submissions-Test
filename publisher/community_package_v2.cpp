@@ -312,7 +312,7 @@ bool ParseMetadataDoc(const std::string& raw, MetadataDoc* doc, SubmissionV2Erro
     static const std::set<std::string> allowed = {
         "schema_version", "submission_uid", "author_name", "github_user", "project_id",
         "project_name", "game_version", "translation_version", "channel", "changelog",
-        "created_at", "file_count", "total_size", "files"};
+        "description", "created_at", "file_count", "total_size", "files"};
     for (const auto& [key, unused] : value.fields()) {
         if (!allowed.count(key)) {
             return Fail(error, "COMMUNITY_V2_SCHEMA", key.c_str(), "unknown field");
@@ -330,6 +330,7 @@ bool ParseMetadataDoc(const std::string& raw, MetadataDoc* doc, SubmissionV2Erro
     const Json* version = FindString(value, "translation_version");
     const Json* channel = FindString(value, "channel");
     const Json* changelog = FindString(value, "changelog");
+    const Json* description = FindString(value, "description");
     const Json* created = FindString(value, "created_at");
     if (!uid || !author || !login || !project || !game || !version || !channel ||
         !changelog || !created) {
@@ -344,6 +345,7 @@ bool ParseMetadataDoc(const std::string& raw, MetadataDoc* doc, SubmissionV2Erro
     doc->metadata.translation_version = version->as_string();
     doc->metadata.channel = channel->as_string();
     doc->metadata.changelog = changelog->as_string();
+    if (description) doc->metadata.description = description->as_string();
     doc->metadata.created_at = created->as_string();
 
     const Json* project_id = value.find("project_id");

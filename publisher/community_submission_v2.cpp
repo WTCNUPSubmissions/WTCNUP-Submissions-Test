@@ -774,6 +774,9 @@ bool ValidateSubmissionMetadataV2(const SubmissionMetadataV2& metadata,
     }
     if (!ValidateText(*metadata.changelog, kMaxChangelog, true, true, error,
                       "changelog", "COMMUNITY_V2_CHANGELOG")) return false;
+    if (metadata.description.has_value() &&
+        !ValidateText(*metadata.description, 1000, true, true, error,
+                      "description", "COMMUNITY_V2_DESCRIPTION")) return false;
     if (!ValidTimestamp(metadata.created_at)) {
         return Fail(error, "COMMUNITY_V2_CREATED_AT", "created_at", "invalid RFC3339 UTC timestamp");
     }
@@ -926,6 +929,9 @@ std::string BuildSubmissionJsonV2(const SubmissionMetadataV2& metadata,
     out << "  \"translation_version\": \"" << JsonEscape(metadata.translation_version) << "\",\n";
     out << "  \"channel\": \"" << JsonEscape(metadata.channel) << "\",\n";
     out << "  \"changelog\": \"" << JsonEscape(*metadata.changelog) << "\",\n";
+    if (metadata.description.has_value() && !metadata.description->empty()) {
+        out << "  \"description\": \"" << JsonEscape(*metadata.description) << "\",\n";
+    }
     out << "  \"created_at\": \"" << JsonEscape(metadata.created_at) << "\",\n";
     out << "  \"file_count\": " << files.size() << ",\n";
     out << "  \"total_size\": " << total << ",\n";

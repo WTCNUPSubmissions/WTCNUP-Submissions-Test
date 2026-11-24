@@ -41,6 +41,8 @@ struct SubmissionMetadataV2 {
 
     // nullopt means the required field is missing; an empty string is valid.
     std::optional<std::string> changelog;
+    // Optional short mod description; absent on legacy submissions.
+    std::optional<std::string> description;
 
     std::string created_at;      // RFC3339 UTC, e.g. 2026-11-23T00:00:00Z
     std::string submission_uid;  // lowercase UUID v4
