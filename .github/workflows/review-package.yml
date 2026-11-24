@@ -1,0 +1,157 @@
+﻿name: Review package (C++)
+
+# Review Artifact Binding: trusted base code builds the exact ZIP that the
+# administrator reviews. This workflow never executes PR files and never gets
+# Release/index write permission.
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: review-package-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  review-package:
+    name: review-package
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out trusted base only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          path: trusted
+
+      - name: Fetch PR objects without checkout
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/pr-objects.git"
+          git init --bare "$data"
+          git -C "$data" fetch --no-tags --depth=1 "https://github.com/${REPO}.git" \
+            "+${BASE_SHA}:refs/wtcnup/base" "+refs/pull/${PR_NUMBER}/head:refs/wtcnup/head"
+          echo "PR_OBJECTS=$data" >> "$GITHUB_ENV"
+
+      - name: Build trusted C++ publisher
+        shell: pwsh
+        run: |
+          cmake -S trusted/publisher -B build -A x64
+          cmake --build build --config Release --target community-publisher
+
+      - name: Build reviewed ZIP and manifest
+        id: package
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY_ID: ${{ github.event.repository.id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          $branch = $env:HEAD_BRANCH
+          if ($branch -notmatch '^wtcnup/submission-') { throw "unexpected branch" }
+          $uid = $branch.Substring('wtcnup/submission-'.Length)
+          $zip = Join-Path $env:RUNNER_TEMP 'submission.zip'
+          & build/Release/community-publisher.exe build-review `
+            --repo $env:PR_OBJECTS --base $env:BASE_SHA --head $env:HEAD_SHA `
+            --uid $uid --author $env:PR_AUTHOR --pr $env:PR_NUMBER --out $zip
+          if ($LASTEXITCODE -ne 0) { throw "C++ package build failed" }
+          $zip_sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $zip_size = (Get-Item $zip).Length
+          $tree = (& git -C $env:PR_OBJECTS rev-parse "$($env:HEAD_SHA)^{tree}").Trim()
+          "UID=$uid" >> $env:GITHUB_OUTPUT
+          "ZIP=$zip" >> $env:GITHUB_OUTPUT
+          "ZIP_SHA=$zip_sha" >> $env:GITHUB_OUTPUT
+          "ZIP_SIZE=$zip_size" >> $env:GITHUB_OUTPUT
+          "TREE=$tree" >> $env:GITHUB_OUTPUT
+
+      - name: Upload reviewed ZIP
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-package-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.package.outputs.ZIP }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Package Manifest
+        id: manifest
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          UID: ${{ steps.package.outputs.UID }}
+          TREE: ${{ steps.package.outputs.TREE }}
+          ZIP_SHA: ${{ steps.package.outputs.ZIP_SHA }}
+          ZIP_SIZE: ${{ steps.package.outputs.ZIP_SIZE }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          $manifest = [ordered]@{
+            manifest_version = 1
+            submission_uid = $env:UID
+            pull_request_number = [int]$env:PR_NUMBER
+            pull_request_head_sha = $env:HEAD_SHA
+            pull_request_base_sha = $env:BASE_SHA
+            source_tree_identity = $env:TREE
+            artifact_id = [long]$env:ARTIFACT_ID
+            workflow_run_id = [long]$env:RUN_ID
+            workflow_run_attempt = [int]$env:RUN_ATTEMPT
+            package_name = 'submission.zip'
+            package_sha256 = $env:ZIP_SHA
+            package_size = [long]$env:ZIP_SIZE
+            builder_version = 'cpp-publisher-1'
+            schema_version = 2
+          }
+          $path = Join-Path $env:RUNNER_TEMP 'package-manifest.json'
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -NoNewline $path
+          "MANIFEST=$path" >> $env:GITHUB_OUTPUT
+          "ARTIFACT_ID=$($env:ARTIFACT_ID)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Package Manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-manifest-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.manifest.outputs.MANIFEST }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish review summary
+        shell: pwsh
+        env:
+          UID: ${{ steps.package.outputs.UID }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ZIP_SHA: ${{ steps.package.outputs.ZIP_SHA }}
+          ZIP_SIZE: ${{ steps.package.outputs.ZIP_SIZE }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          MANIFEST_ARTIFACT: review-manifest-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          @"
+          ## Review package
+          - submission_uid: `$env:UID`
+          - PR head SHA: `$env:HEAD_SHA`
+          - ZIP SHA-256: `$env:ZIP_SHA`
+          - ZIP size: `$env:ZIP_SIZE`
+          - ZIP Artifact ID: `$env:ARTIFACT_ID`
+          - Manifest artifact: `$env:MANIFEST_ARTIFACT`
+          Download the exact ZIP and Manifest before approving. Any new PR head invalidates this artifact.
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY
+
