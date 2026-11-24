@@ -1,0 +1,206 @@
+name: Publish community package
+
+# Manual, protected publication from an already-reviewed ZIP artifact.
+# The exact artifact bytes are uploaded; the ZIP is never rebuilt here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_id:
+        description: Reviewed ZIP artifact ID
+        required: true
+      manifest_artifact_id:
+        description: Package Manifest artifact ID
+        required: true
+      tag:
+        description: Release tag
+        required: true
+      uid:
+        description: submission_uid
+        required: true
+      author:
+        description: GitHub PR author login
+        required: true
+      pr_number:
+        description: Pull request number
+        required: true
+      base_sha:
+        description: Exact PR base SHA
+        required: true
+      head_sha:
+        description: Exact reviewed PR head SHA
+        required: true
+      project_id:
+        description: Community project_id
+        required: true
+      project_name:
+        description: Community project name
+        required: true
+      translation_version:
+        description: Translation version
+        required: true
+      game_version:
+        description: Game version
+        required: true
+      channel:
+        description: stable or beta
+        required: true
+        default: stable
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    name: publish-community
+    runs-on: windows-latest
+    timeout-minutes: 25
+    environment: community-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact reviewed artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          MANIFEST_ARTIFACT_ID: ${{ inputs.manifest_artifact_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          $base = Join-Path $env:RUNNER_TEMP 'review'
+          New-Item -ItemType Directory -Force $base | Out-Null
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Publish' }
+          Invoke-WebRequest "https://api.github.com/repos/$env:REPO/actions/artifacts/$env:ARTIFACT_ID/zip" -Headers $headers -OutFile (Join-Path $base 'package-artifact.zip')
+          Invoke-WebRequest "https://api.github.com/repos/$env:REPO/actions/artifacts/$env:MANIFEST_ARTIFACT_ID/zip" -Headers $headers -OutFile (Join-Path $base 'manifest-artifact.zip')
+          Expand-Archive (Join-Path $base 'package-artifact.zip') -DestinationPath (Join-Path $base 'package') -Force
+          Expand-Archive (Join-Path $base 'manifest-artifact.zip') -DestinationPath (Join-Path $base 'manifest') -Force
+          $zip = Get-ChildItem (Join-Path $base 'package') -Recurse -Filter 'submission.zip' | Select-Object -First 1
+          $manifest = Get-ChildItem (Join-Path $base 'manifest') -Recurse -Filter 'package-manifest.json' | Select-Object -First 1
+          if (-not $zip -or -not $manifest) { throw 'artifact content missing' }
+          "ZIP=$($zip.FullName)" >> $env:GITHUB_ENV
+          "MANIFEST=$($manifest.FullName)" >> $env:GITHUB_ENV
+
+      - name: Verify manifest and exact ZIP
+        shell: pwsh
+        env:
+          UID: ${{ inputs.uid }}
+          AUTHOR: ${{ inputs.author }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          $m = Get-Content $env:MANIFEST -Raw | ConvertFrom-Json
+          if ($m.submission_uid -ne $env:UID) { throw 'UID mismatch' }
+          if ($m.pull_request_number -ne [int]$env:PR_NUMBER) { throw 'PR mismatch' }
+          if ($m.pull_request_head_sha -ne $env:HEAD_SHA) { throw 'head mismatch' }
+          if ($m.pull_request_base_sha -ne $env:BASE_SHA) { throw 'base mismatch' }
+          $sha = (Get-FileHash $env:ZIP -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne $m.package_sha256) { throw 'ZIP sha mismatch' }
+          if ((Get-Item $env:ZIP).Length -ne [long]$m.package_size) { throw 'ZIP size mismatch' }
+          "ZIP_SHA=$sha" >> $env:GITHUB_ENV
+          "ZIP_SIZE=$((Get-Item $env:ZIP).Length)" >> $env:GITHUB_ENV
+
+      - name: Build trusted publisher signer
+        shell: pwsh
+        run: |
+          cmake -S publisher -B build -A x64
+          cmake --build build --config Release --target community-publisher
+
+      - name: Create Release and upload exact ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          ZIP: ${{ env.ZIP }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Publish' }
+          $body = @{ tag_name = $env:TAG; name = "Community $env:TAG"; body = 'Reviewed community package.'; draft = $false; prerelease = $false } | ConvertTo-Json
+          $release = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/releases" -Method Post -Headers $headers -ContentType 'application/json' -Body $body
+          $upload = ($release.upload_url -replace '\{\?name,label\}', '') + '?name=submission.zip'
+          $asset = Invoke-RestMethod $upload -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Publish'; 'Content-Type' = 'application/zip' } -InFile $env:ZIP
+          "RELEASE_ID=$($release.id)" >> $env:GITHUB_ENV
+          "ASSET_ID=$($asset.id)" >> $env:GITHUB_ENV
+          "ASSET_SHA=$($asset.digest)" >> $env:GITHUB_ENV
+
+      - name: Update signed single-file index
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          UID: ${{ inputs.uid }}
+          AUTHOR: ${{ inputs.author }}
+          TAG: ${{ inputs.tag }}
+          ZIP_SHA: ${{ env.ZIP_SHA }}
+          ZIP_SIZE: ${{ env.ZIP_SIZE }}
+          COMMUNITY_INDEX_ED25519_PRIVATE_KEY: ${{ secrets.COMMUNITY_INDEX_ED25519_PRIVATE_KEY }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          PROJECT_NAME: ${{ inputs.project_name }}
+          TRANSLATION_VERSION: ${{ inputs.translation_version }}
+          GAME_VERSION: ${{ inputs.game_version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Publish' }
+          $branch = 'approved-packages'
+          $ref = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/ref/heads/$branch" -Headers $headers
+          $parent = $ref.object.sha
+          $indexRaw = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/contents/CommunityIndex.json?ref=$branch" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github.raw'; 'User-Agent' = 'WTCNUP-Publish' }
+          $index = $indexRaw | ConvertFrom-Json
+          $author = $index.authors | Where-Object { $_.author_id -eq 'sennjukai' } | Select-Object -First 1
+          if (-not $author) { throw 'expected index author missing' }
+          $project = $author.projects | Where-Object { $_.project_id -eq $env:PROJECT_ID } | Select-Object -First 1
+          if (-not $project) {
+            $project = [pscustomobject]@{ project_id = $env:PROJECT_ID; project_name = $env:PROJECT_NAME; status = 'active'; versions = @() }
+            $author.projects += $project
+          }
+          $project.versions += [pscustomobject]@{
+            translation_version = $env:TRANSLATION_VERSION
+            channel = $env:CHANNEL
+            game_version = $env:GAME_VERSION
+            release_tag = $env:TAG
+            asset_name = 'submission.zip'
+            asset_sha256 = $env:ZIP_SHA
+            asset_size = [long]$env:ZIP_SIZE
+            reviewed_head_sha = '${{ inputs.head_sha }}'
+            published_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            status = 'published'
+            submission_uid = $env:UID
+          }
+          $index.index_version = [int]$index.index_version + 1
+          $index.generated_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          $indexPath = Join-Path $env:RUNNER_TEMP 'CommunityIndex.json'
+          $sigPath = Join-Path $env:RUNNER_TEMP 'CommunityIndex.sig'
+          $index | ConvertTo-Json -Depth 20 -Compress | Set-Content -Encoding utf8 -NoNewline $indexPath
+          & build/Release/community-publisher.exe sign-index --index $indexPath --out $sigPath --key-id 'community-index-2026-01'
+          if ($LASTEXITCODE -ne 0) { throw 'sign failed' }
+          function Blob([string]$path) {
+            $bytes = [IO.File]::ReadAllBytes($path)
+            $b64 = [Convert]::ToBase64String($bytes)
+            $body = @{ content = $b64; encoding = 'base64' } | ConvertTo-Json -Compress
+            (Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/blobs" -Method Post -Headers $headers -ContentType 'application/json' -Body $body).sha
+          }
+          $treeBody = @{ base_tree = (Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/commits/$parent" -Headers $headers).tree.sha; tree = @(
+            @{ path = 'CommunityIndex.json'; mode = '100644'; type = 'blob'; sha = (Blob $indexPath) },
+            @{ path = 'CommunityIndex.sig'; mode = '100644'; type = 'blob'; sha = (Blob $sigPath) }
+          ) } | ConvertTo-Json -Depth 8 -Compress
+          $tree = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/trees" -Method Post -Headers $headers -ContentType 'application/json' -Body $treeBody
+          $commitBody = @{ message = "Publish $($env:UID)"; tree = $tree.sha; parents = @($parent) } | ConvertTo-Json -Depth 8 -Compress
+          $commit = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/commits" -Method Post -Headers $headers -ContentType 'application/json' -Body $commitBody
+          Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/refs/heads/$branch" -Method Patch -Headers $headers -ContentType 'application/json' -Body (@{ sha = $commit.sha; force = $false } | ConvertTo-Json -Compress) | Out-Null
+          "INDEX_COMMIT=$($commit.sha)" >> $env:GITHUB_ENV
+
+      - name: Summary
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+          ASSET_SHA: ${{ env.ASSET_SHA }}
+          INDEX_COMMIT: ${{ env.INDEX_COMMIT }}
+        run: |
+          @"
+          ## Published community package
+          - Tag: `$env:TAG`
+          - Asset: submission.zip
+          - Asset digest: `$env:ASSET_SHA`
+          - Index commit: `$env:INDEX_COMMIT`
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY
