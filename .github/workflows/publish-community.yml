@@ -145,8 +145,8 @@ jobs:
           $branch = 'approved-packages'
           $ref = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/ref/heads/$branch" -Headers $headers
           $parent = $ref.object.sha
-          $indexRaw = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/contents/CommunityIndex.json?ref=$branch" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github.raw'; 'User-Agent' = 'WTCNUP-Publish' }
-          $index = $indexRaw | ConvertFrom-Json
+          $indexResponse = Invoke-WebRequest "https://api.github.com/repos/$env:REPO/contents/CommunityIndex.json?ref=$branch" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github.raw'; 'User-Agent' = 'WTCNUP-Publish' } -UseBasicParsing
+          $index = $indexResponse.Content | ConvertFrom-Json
           $author = $index.authors | Where-Object { $_.author_id -eq 'sennjukai' } | Select-Object -First 1
           if (-not $author) { throw 'expected index author missing' }
           $project = $author.projects | Where-Object { $_.project_id -eq $env:PROJECT_ID } | Select-Object -First 1
