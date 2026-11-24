@@ -73,7 +73,8 @@ jobs:
               channel = [string]$submission.channel
             }
           } | ConvertTo-Json -Depth 5 -Compress
-          Invoke-RestMethod "https://api.github.com/repos/$env:REPO/actions/workflows/publish-community.yml/dispatches" -Method Post -Headers $headers -ContentType 'application/json' -Body $body | Out-Null
+          $bodyBytes = [Text.Encoding]::UTF8.GetBytes($body)
+          Invoke-RestMethod "https://api.github.com/repos/$env:REPO/actions/workflows/publish-community.yml/dispatches" -Method Post -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bodyBytes | Out-Null
           @"
           ## Merged publish dispatched
           - PR: #$($env:PR_NUMBER)
