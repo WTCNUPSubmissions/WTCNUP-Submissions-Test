@@ -120,10 +120,25 @@ jobs:
           ZIP: ${{ env.ZIP }}
         run: |
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Publish' }
-          $body = @{ tag_name = $env:TAG; name = "Community $env:TAG"; body = 'Reviewed community package.'; draft = $false; prerelease = $false } | ConvertTo-Json
-          $release = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/releases" -Method Post -Headers $headers -ContentType 'application/json' -Body $body
-          $upload = ($release.upload_url -replace '\{\?name,label\}', '') + '?name=submission.zip'
-          $asset = Invoke-RestMethod $upload -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Publish'; 'Content-Type' = 'application/zip' } -InFile $env:ZIP
+          $release = $null
+          try {
+            $release = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/releases/tags/$($env:TAG)" -Headers $headers
+          } catch {
+            $status = $_.Exception.Response.StatusCode.value__
+            if ($status -ne 404) { throw }
+          }
+          if (-not $release) {
+            $body = @{ tag_name = $env:TAG; name = "Community $env:TAG"; body = 'Reviewed community package.'; draft = $false; prerelease = $false } | ConvertTo-Json
+            $release = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/releases" -Method Post -Headers $headers -ContentType 'application/json' -Body $body
+          }
+          $asset = $release.assets | Where-Object { $_.name -eq 'submission.zip' } | Select-Object -First 1
+          if (-not $asset) {
+            $upload = ($release.upload_url -replace '\{\?name,label\}', '') + '?name=submission.zip'
+            $asset = Invoke-RestMethod $upload -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'WTCNUP-Publish'; 'Content-Type' = 'application/zip' } -InFile $env:ZIP
+          } else {
+            if ([long]$asset.size -ne [long]$env:ZIP_SIZE) { throw 'existing asset size mismatch' }
+            if ($asset.digest -and $asset.digest -ne "sha256:$env:ZIP_SHA") { throw 'existing asset digest mismatch' }
+          }
           "RELEASE_ID=$($release.id)" >> $env:GITHUB_ENV
           "ASSET_ID=$($asset.id)" >> $env:GITHUB_ENV
           "ASSET_SHA=$($asset.digest)" >> $env:GITHUB_ENV
