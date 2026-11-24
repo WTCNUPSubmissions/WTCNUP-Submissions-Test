@@ -39,6 +39,10 @@ on:
       translation_version:
         description: Translation version
         required: true
+      description:
+        description: Short mod description
+        required: false
+        default: ''
       game_version:
         description: Game version
         required: true
@@ -158,6 +162,7 @@ jobs:
           PROJECT_ID: ${{ inputs.project_id }}
           PROJECT_NAME: ${{ inputs.project_name }}
           TRANSLATION_VERSION: ${{ inputs.translation_version }}
+          DESCRIPTION: ${{ inputs.description }}
           GAME_VERSION: ${{ inputs.game_version }}
           CHANNEL: ${{ inputs.channel }}
         run: |
@@ -179,6 +184,7 @@ jobs:
             translation_version = $env:TRANSLATION_VERSION
             channel = $env:CHANNEL
             game_version = $env:GAME_VERSION
+            description = $env:DESCRIPTION
             release_tag = $env:TAG
             asset_name = 'submission.zip'
             asset_sha256 = $env:ZIP_SHA

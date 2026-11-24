@@ -69,6 +69,7 @@ jobs:
               project_id = $projectId
               project_name = [string]$submission.project_name
               translation_version = [string]$submission.translation_version
+              description = [string]$submission.description
               game_version = [string]$submission.game_version
               channel = [string]$submission.channel
             }
