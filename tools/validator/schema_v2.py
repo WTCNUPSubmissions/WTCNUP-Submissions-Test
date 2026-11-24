@@ -47,7 +47,7 @@ REQUIRED = {
     "project_name", "game_version", "translation_version", "channel",
     "changelog", "created_at", "file_count", "total_size", "files",
 }
-ALLOWED = REQUIRED | {"project_id"}
+ALLOWED = REQUIRED | {"project_id", "description"}
 
 UNICODE_VERSION = unicodedata.unidata_version
 
@@ -244,6 +244,8 @@ def validate_metadata(metadata, expected_uid: str | None = None,
     _field(metadata, "translation_version", 100)
     require(metadata["channel"] in ("stable", "beta"), "channel must be stable or beta")
     _field(metadata, "changelog", 10000, allow_empty=True)
+    if "description" in metadata:
+        _field(metadata, "description", 1000, allow_empty=True)
     created = metadata["created_at"]
     require(isinstance(created, str) and TIME_RE.fullmatch(created) is not None, "invalid created_at")
     import datetime as dt
