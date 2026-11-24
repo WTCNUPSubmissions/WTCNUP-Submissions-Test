@@ -70,6 +70,7 @@ jobs:
               project_name = [string]$submission.project_name
               translation_version = [string]$submission.translation_version
               description = [string]$submission.description
+              changelog = [string]$submission.changelog
               game_version = [string]$submission.game_version
               channel = [string]$submission.channel
             }

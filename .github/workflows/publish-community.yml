@@ -43,6 +43,10 @@ on:
         description: Short mod description
         required: false
         default: ''
+      changelog:
+        description: Mod update notes
+        required: false
+        default: ''
       game_version:
         description: Game version
         required: true
@@ -163,6 +167,7 @@ jobs:
           PROJECT_NAME: ${{ inputs.project_name }}
           TRANSLATION_VERSION: ${{ inputs.translation_version }}
           DESCRIPTION: ${{ inputs.description }}
+          CHANGELOG: ${{ inputs.changelog }}
           GAME_VERSION: ${{ inputs.game_version }}
           CHANNEL: ${{ inputs.channel }}
         run: |
@@ -185,6 +190,7 @@ jobs:
             channel = $env:CHANNEL
             game_version = $env:GAME_VERSION
             description = $env:DESCRIPTION
+            changelog = $env:CHANGELOG
             release_tag = $env:TAG
             asset_name = 'submission.zip'
             asset_sha256 = $env:ZIP_SHA
