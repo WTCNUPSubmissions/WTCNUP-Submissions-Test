@@ -51,6 +51,10 @@ permissions:
   contents: write
   actions: read
 
+concurrency:
+  group: community-approved-packages-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: publish-community
