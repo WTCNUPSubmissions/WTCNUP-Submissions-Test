@@ -134,6 +134,7 @@ jobs:
           TAG: ${{ inputs.tag }}
           ZIP_SHA: ${{ env.ZIP_SHA }}
           ZIP_SIZE: ${{ env.ZIP_SIZE }}
+          ZIP: ${{ env.ZIP }}
           COMMUNITY_INDEX_ED25519_PRIVATE_KEY: ${{ secrets.COMMUNITY_INDEX_ED25519_PRIVATE_KEY }}
           PROJECT_ID: ${{ inputs.project_id }}
           PROJECT_NAME: ${{ inputs.project_name }}
@@ -181,9 +182,13 @@ jobs:
             $body = @{ content = $b64; encoding = 'base64' } | ConvertTo-Json -Compress
             (Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/blobs" -Method Post -Headers $headers -ContentType 'application/json' -Body $body).sha
           }
+          $safeVersion = $env:TRANSLATION_VERSION -replace '[^A-Za-z0-9._-]', '_'
+          if (-not $safeVersion) { $safeVersion = 'submission' }
+          $packagePath = "packages/$($env:UID)/$safeVersion/submission.zip"
           $treeBody = @{ base_tree = (Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/commits/$parent" -Headers $headers).tree.sha; tree = @(
             @{ path = 'CommunityIndex.json'; mode = '100644'; type = 'blob'; sha = (Blob $indexPath) },
-            @{ path = 'CommunityIndex.sig'; mode = '100644'; type = 'blob'; sha = (Blob $sigPath) }
+            @{ path = 'CommunityIndex.sig'; mode = '100644'; type = 'blob'; sha = (Blob $sigPath) },
+            @{ path = $packagePath; mode = '100644'; type = 'blob'; sha = (Blob $env:ZIP) }
           ) } | ConvertTo-Json -Depth 8 -Compress
           $tree = Invoke-RestMethod "https://api.github.com/repos/$env:REPO/git/trees" -Method Post -Headers $headers -ContentType 'application/json' -Body $treeBody
           $commitBody = @{ message = "Publish $($env:UID)"; tree = $tree.sha; parents = @($parent) } | ConvertTo-Json -Depth 8 -Compress
@@ -204,4 +209,5 @@ jobs:
           - Asset: submission.zip
           - Asset digest: `$env:ASSET_SHA`
           - Index commit: `$env:INDEX_COMMIT`
+          - Approved package: `packages/$env:UID/$env:TRANSLATION_VERSION/submission.zip`
           "@ | Add-Content $env:GITHUB_STEP_SUMMARY
